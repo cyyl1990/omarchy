@@ -236,10 +236,12 @@ stage_installed_dir() {
 # list above. A directory the user wrote themselves, and a symlink to their own
 # working copy, are theirs to fill however they like -- the same distinction
 # omarchy-theme-extras draws when it decides which themes it may pull.
+# A .omarchy-trusted marker file skips the denylist for git themes the user
+# has explicitly vetted (e.g. themes they maintain themselves).
 theme_came_from_a_repo() {
   local source="$1"
 
-  [[ ! -L $source && -d $source/.git ]]
+  [[ ! -L $source && -d $source/.git && ! -f $source/.omarchy-trusted ]]
 }
 
 stage_installed_theme() {
