@@ -1,0 +1,46 @@
+#!/bin/bash
+
+# omarchy:summary=Trust an installed git theme so its Lua and terminal configs are staged
+# omarchy:args=<theme-name>
+# omarchy:examples=omarchy theme trust banish
+
+theme="${1:-}"
+
+if [[ -z $theme || $theme == "." || $theme == ".." || $theme == */* ]]; then
+  echo "Usage: omarchy-theme-trust <theme-name>" >&2
+  exit 1
+fi
+
+theme_path="$HOME/.config/omarchy/themes/$theme"
+
+if [[ ! -d $theme_path ]]; then
+  echo "Error: '$theme' is not an installed theme under ~/.config/omarchy/themes." >&2
+  exit 1
+fi
+
+# A symlinked working copy is the user's own by construction; writing a marker
+# through the link would touch their actual checkout for no change in behaviour.
+if [[ -L $theme_path ]]; then
+  echo "$theme is a symlinked working copy and already stages in full."
+  exit 0
+fi
+
+if [[ -f $theme_path/.omarchy-trusted ]]; then
+  echo "$theme is already trusted."
+  exit 0
+fi
+
+touch "$theme_path/.omarchy-trusted"
+
+if [[ -e $theme_path/.git ]]; then
+  echo "Trusted $theme: Omarchy will now stage its Lua and terminal configs verbatim."
+else
+  echo "Trusted $theme: no .git entry to guard against, but it is marked for the future."
+fi
+
+if [[ -r $HOME/.local/state/omarchy/current/theme.name ]]; then
+  current=$(cat "$HOME/.local/state/omarchy/current/theme.name")
+  if [[ $current == "$theme" ]]; then
+    echo "Run 'omarchy theme set $theme' to apply the now-trusted files to the running desktop."
+  fi
+fi

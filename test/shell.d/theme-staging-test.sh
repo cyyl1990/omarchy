@@ -119,6 +119,42 @@ grep -q 'hyprland.lua' "$test_tmp/stderr" || fail "omarchy-theme-set names the f
 
 pass "an installed theme keeps its colour and loses everything that runs code"
 
+# `omarchy theme trust` is how the user takes responsibility for a stranger's
+# clone: it writes the .omarchy-trusted marker stage_installed_theme looks for,
+# and from then on the theme's Lua and terminal configs stage verbatim. A
+# symlinked working copy is the user's own already, so trusting one is a no-op.
+trusted_theme="$themes/trusted"
+mkdir -p "$trusted_theme/.git"
+write_colors "$trusted_theme/colors.toml"
+printf 'os.execute("%s")\n' "$marker" >"$trusted_theme/hyprland.lua"
+printf 'shell %s\n' "$marker" >"$trusted_theme/kitty.conf"
+
+set_theme trusted || fail "omarchy-theme-set applies an untrusted git theme"
+assert_no_marker hyprland.lua "an untrusted git theme loses its hyprland.lua to the templates"
+
+ln -s "$trusted_theme" "$themes/trusted-link"
+trust_out=$(HOME="$home" "$ROOT/bin/omarchy-theme-trust" trusted-link)
+[[ $trust_out == *"symlinked working copy"* ]] || fail "trusting a symlink is a no-op" "$trust_out"
+[[ ! -e $trusted_theme/.omarchy-trusted ]] || fail "trusting a symlink does not write through it"
+pass "trusting a symlinked working copy writes nothing"
+
+if HOME="$home" "$ROOT/bin/omarchy-theme-trust" not-installed >/dev/null 2>&1; then
+  fail "trust refuses a theme that is not installed"
+fi
+pass "trust refuses a theme that is not installed"
+
+HOME="$home" "$ROOT/bin/omarchy-theme-trust" trusted >/dev/null
+[[ -f $trusted_theme/.omarchy-trusted ]] || fail "trust writes the .omarchy-trusted marker"
+
+set_theme trusted || fail "omarchy-theme-set applies a trusted git theme"
+grep -q "$marker" "$(staged hyprland.lua)" || fail "a trusted theme stages its own hyprland.lua"
+grep -q "$marker" "$(staged kitty.conf)" || fail "a trusted theme stages its own kitty.conf"
+[[ ! -s $test_tmp/stderr ]] || fail "a trusted theme reports nothing ignored" "$(cat "$test_tmp/stderr")"
+
+trust_out=$(HOME="$home" "$ROOT/bin/omarchy-theme-trust" trusted)
+[[ $trust_out == *"already trusted"* ]] || fail "trusting the same theme twice is idempotent" "$trust_out"
+pass "omarchy theme trust stages a git theme's Lua and terminal configs verbatim"
+
 # icons.theme is staged verbatim and handed to gsettings, so a symlinked one
 # would stage a copy of whatever it points at.
 linked="$themes/linked"
@@ -202,6 +238,83 @@ for name in .. . "../../evil"; do
 done
 
 pass "a theme name cannot climb out of the theme directories"
+
+# `git clone` writes .git as a directory, but a linked worktree or a submodule
+# writes it as a file holding "gitdir: ...". Both mean the contents came from a
+# repo, so both have to be filtered: testing only for a directory sends a
+# worktree down the unfiltered branch.
+worktree="$themes/worktree"
+mkdir -p "$worktree"
+write_colors "$worktree/colors.toml"
+printf 'gitdir: /somewhere/else\n' >"$worktree/.git"
+printf 'os.execute("%s")\n' "$marker" >"$worktree/hyprland.lua"
+
+set_theme worktree || fail "omarchy-theme-set applies a theme whose .git is a file"
+assert_no_marker hyprland.lua "a theme whose .git is a file is still an installed theme"
+
+pass "a .git file is treated as an installed theme, not one the user wrote"
+
+# The denylist has to hold at every depth. Nothing shipped reads code from a
+# theme subdirectory today, but staging it verbatim breaks the guarantee.
+nested="$themes/nested"
+mkdir -p "$nested/.git" "$nested/sub"
+write_colors "$nested/colors.toml"
+printf 'os.execute("%s")\n' "$marker" >"$nested/sub/hyprland.lua"
+printf '[terminal.shell]\nprogram = "%s"\n' "$marker" >"$nested/sub/alacritty.toml"
+printf 'png\n' >"$nested/sub/art.png"
+
+set_theme nested || fail "omarchy-theme-set applies a theme with a subdirectory"
+assert_not_staged sub/hyprland.lua "a subdirectory cannot smuggle Lua past the denylist"
+assert_not_staged sub/alacritty.toml "a subdirectory cannot smuggle a terminal config past the denylist"
+assert_staged sub/art.png "colour and images in a subdirectory are still staged"
+
+pass "the denylist applies inside subdirectories"
+
+# The loaders ask for the lowercase name, but a casefold filesystem would answer
+# a request for hyprland.lua with a staged hyprland.LUA.
+uppercase="$themes/uppercase"
+mkdir -p "$uppercase/.git"
+write_colors "$uppercase/colors.toml"
+printf 'os.execute("%s")\n' "$marker" >"$uppercase/HYPRLAND.LUA"
+printf '[terminal.shell]\nprogram = "%s"\n' "$marker" >"$uppercase/Alacritty.TOML"
+
+set_theme uppercase || fail "omarchy-theme-set applies a theme with uppercase filenames"
+assert_not_staged HYPRLAND.LUA "the .lua match is case-insensitive"
+assert_not_staged Alacritty.TOML "the denied names are matched case-insensitively"
+
+pass "denied files are matched without regard to case"
+
+# bash's ${x,,} folds by the caller's LC_CTYPE. In a Turkish or Azeri locale
+# "I" folds to a dotless "ı", so KITTY.CONF becomes "kıtty.conf" and no longer
+# equals "kitty.conf": the uppercase file stages, and on a casefold filesystem a
+# later open of kitty.conf finds it. The denylist has to fold the same way
+# whoever runs omarchy-theme-set.
+turkish_locale=$(locale -a 2>/dev/null | grep -iE '^(tr_TR|az_AZ)\.utf-?8$' | head -1 || true)
+
+if [[ -n $turkish_locale ]]; then
+  # Positive control: confirm this locale really does the dotless fold, so that
+  # a pass below means the denylist withstood it, not that nothing folded.
+  probe=$(LC_ALL="$turkish_locale" bash -c 'x=KITTY.CONF; printf "%s" "${x,,}"')
+  [[ $probe == "kıtty.conf" ]] ||
+    fail "the $turkish_locale probe folds I to a dotless i" "got: $probe"
+
+  dotless="$themes/dotless"
+  mkdir -p "$dotless/.git"
+  write_colors "$dotless/colors.toml"
+  printf 'os.execute("%s")\n' "$marker" >"$dotless/KITTY.CONF"
+  printf '[terminal.shell]\nprogram = "%s"\n' "$marker" >"$dotless/FOOT.INI"
+  printf 'png\n' >"$dotless/ART.PNG"
+
+  LC_ALL="$turkish_locale" set_theme dotless ||
+    fail "omarchy-theme-set applies a theme under $turkish_locale"
+  assert_not_staged KITTY.CONF "a terminal config is denied when the locale folds I to a dotless i"
+  assert_not_staged FOOT.INI "foot.ini is denied when the locale folds I to a dotless i"
+  assert_staged ART.PNG "colour is still staged under $turkish_locale"
+
+  pass "the denylist folds case under a fixed locale, not the caller's"
+else
+  pass "no Turkish or Azeri locale installed; skipping the case-fold locale check"
+fi
 
 # A denylist is only correct while someone adding a template classifies what it
 # generates. Every generated theme file is either denied to an installed theme or

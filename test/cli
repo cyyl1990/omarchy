@@ -241,6 +241,12 @@ pass "safe dispatch works for theme list"
 "$CLI" theme current >/dev/null
 pass "safe dispatch works for theme current"
 
+"$CLI" commands --json | jq -e '.commands[] | select(.binary == "omarchy-theme-trust" and .route == "omarchy theme trust")' >/dev/null
+pass "theme trust route and metadata resolve"
+
+"$CLI" theme trust --help >/dev/null
+pass "safe dispatch works for theme trust help"
+
 "$CLI" font list >/dev/null
 pass "safe dispatch works for font list"
 
